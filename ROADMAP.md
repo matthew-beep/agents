@@ -1,84 +1,77 @@
-# GitHub Trend Watcher — Roadmap
+# Agent Chat — Roadmap
 
 ## Current state
 
-The repo has a minimal scaffold:
-
-- **Backend** (`backend/main.py`): FastAPI app that proxies streaming chat requests to a local Ollama instance. No agent logic, no GitHub tooling.
-- **Frontend** (`frontend/app/page.tsx`): Basic chat UI that streams Ollama responses token-by-token. No digest feed, no topic tabs, no cards.
-
-Everything below is not yet built.
+- **Backend** (`backend/main.py`): FastAPI app proxying to local Ollama. System prompt tells the model it has access to agents and how to signal a call via JSON. Routing detection logs agent calls to console but doesn't execute anything yet.
+- **Frontend** (`frontend/app/page.tsx`): Chat UI with message bubbles, markdown rendering via `react-markdown` + `remark-gfm`, think bubble that disappears once content starts streaming.
 
 ---
 
-## Phase 1 — Core agent (backend)
+## Phase 1 — GitHub agent
 
-The deterministic loop that fetches trending repos and writes a digest.
+Wire up the first real agent so the routing detection actually does something.
 
-- [ ] Restructure backend into `agent/` package
-  - `agent/tools/github.py` — `get_trending_repos(language, since)`, `get_readme(owner, repo)`
-  - `agent/tools/user_prefs.py` — `get_user_topics(mode)` with modes A / B / C
-  - `agent/tools/llm.py` — `summarize_repo(name, description, readme)`, `synthesize_digest(summaries)`
-  - `agent/tools/storage.py` — `write_digest(digest)`, `read_digest()`
-  - `agent/agent.py` — orchestration loop
-  - `agent/config.py` — env-based config (`GITHUB_TOKEN`, `OLLAMA_URL`, `OLLAMA_MODEL`, `SINCE`, `MAX_REPOS`)
-- [ ] `run.py` entry point at repo root
-- [ ] `.env` + `python-dotenv` wired up
-- [ ] `data/` directory with `digest.json` output target
-- [ ] `data/user_prefs.json` and `data/topics_from_convos.json` stubs for modes A/B
-- [ ] Update `requirements.txt` (`httpx`, `ollama`, `python-dotenv`, `fastapi[standard]`)
+- [ ] `backend/agents/github_agent.py` — agent entry point, owns its own system prompt and tool loop
+- [ ] `backend/tools/github.py` — tool functions + schemas
+  - `search_repos(query, sort)` → list of repos from GitHub search API
+  - `get_repo_tree(owner, repo)` → all file paths
+  - `get_file(owner, repo, path)` → raw file content
+  - `get_readme(owner, repo)` → raw README text
+- [ ] `AGENT_MAP` in `main.py` — maps agent name strings to agent functions
+- [ ] Execute the agent in the routing block and stream its response back
+- [ ] `.env` + `python-dotenv` for `GITHUB_TOKEN`
+
+**Milestone:** "what files are in owner/repo?" triggers the github agent, fetches the tree, and streams a real answer.
+
+---
+
+## Phase 2 — Frontend status indicator
+
+The blocking routing call + agent execution creates a silent gap. Make it visible.
+
+- [ ] Backend sends a `{"type": "status", "message": "..."}` chunk before running the agent
+- [ ] Frontend detects `type: "status"` chunks and shows a status line below the last message
+- [ ] Status line disappears once content starts streaming
+
+---
+
+## Phase 3 — Multi-agent foundation
+
+Make it easy to add new agents without touching `main.py`.
+
+- [ ] Each agent is a self-contained module: system prompt, tools, and tool loop in one place
+- [ ] Auto-discovery or explicit registry so adding an agent is just adding a file + one entry
+- [ ] Add a second agent (e.g. general web search or a local file reader) to prove the pattern works
+
+---
+
+## Phase 4 — GitHub Trend Watcher (digest mode)
+
+The original concept — a scheduled agent that surfaces trending repos.
+
+- [ ] `backend/agents/trend_agent.py` — fetches trending repos by topic, summarizes with LLM, writes digest
+- [ ] `data/digest.json` output
+- [ ] `run.py` entry point to trigger manually
+- [ ] `data/user_prefs.json` for topic preferences
+- [ ] Cron job or launchd plist for nightly runs
 
 **Milestone:** `python run.py` produces a valid `digest.json`.
 
 ---
 
-## Phase 2 — Frontend digest feed
+## Phase 5 — Digest frontend
 
-Replace the chat UI with a digest reader.
-
-- [ ] `types/digest.ts` — `Repo`, `Topic`, `Digest` types matching `digest.json` shape
-- [ ] `app/api/digest/route.ts` — reads `data/digest.json`, returns JSON
-- [ ] `components/SynthesisPanel.tsx` — cross-repo patterns banner at top
-- [ ] `components/DigestCard.tsx` — single repo card (name, stars, summary, GitHub link)
-- [ ] `app/page.tsx` — topic tabs + card list, fetches from `/api/digest`
-
-**Milestone:** `npm run dev` shows a populated digest feed when `digest.json` exists.
+- [ ] `app/digest/page.tsx` — separate route from the chat UI
+- [ ] `app/api/digest/route.ts` — reads `data/digest.json`
+- [ ] `components/DigestCard.tsx` — repo card (name, stars, summary, link)
+- [ ] `components/SynthesisPanel.tsx` — cross-repo patterns banner
 
 ---
 
-## Phase 3 — Polish & reliability
+## Phase 6 — Persistence & scheduling
 
-- [ ] Error states in the frontend (no digest yet, stale digest warning)
-- [ ] Rate-limit handling in `github.py` (respect `Retry-After`, backoff)
-- [ ] README trimming + token budget guard in `llm.py` (cap at 3000 chars)
-- [ ] Cron job or launchd plist to run `python run.py` nightly
-- [ ] `.env.example` documenting all required vars
-
----
-
-## Phase 4 — LLM-driven loop
-
-The agent decides which repos to dig into rather than processing everything.
-
-- [ ] Model evaluates repo metadata (name, description, stars delta) before fetching README
-- [ ] Skip/dig scoring prompt — model returns `{action: "skip" | "dig", reason: string}`
-- [ ] `agent.py` branches on score; only fetches READMEs for "dig" repos
-- [ ] Log skipped repos + reasons to `data/skipped.json` for inspection
-
----
-
-## Phase 5 — Persistence & scheduling
-
-- [ ] Swap `digest.json` for Postgres (store digest runs, repo snapshots, summaries)
+- [ ] Swap `digest.json` for Postgres
 - [ ] SQLAlchemy models: `DigestRun`, `RepoSummary`
 - [ ] Alembic migrations
-- [ ] Celery + Celery Beat for nightly scheduled runs
-- [ ] Frontend polls for new digests (SSE or short-poll) instead of reading a static file
-
----
-
-## Phase 6 — Mode A (Virgil integration)
-
-- [ ] Pipeline to pull topics from Virgil conversation history into `data/topics_from_convos.json`
-- [ ] Mode A in `user_prefs.py` reads and ranks that list
-- [ ] Feedback loop: user marks repos as interesting → influences future topic weights
+- [ ] Celery Beat for scheduled runs
+- [ ] Frontend polls for new digests instead of reading a static file

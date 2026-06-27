@@ -98,7 +98,7 @@ export default function Home() {
 
     try {
 
-      const res = await fetch(`${GITHUB_URL}/repos/matthew-beep/agents`, {
+      const res = await fetch(`${GITHUB_URL}/repos/matthew-beep/agents/git/trees/main?recursive=1`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       });

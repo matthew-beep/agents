@@ -4,11 +4,22 @@ from fastapi.responses import StreamingResponse
 
 from pydantic import BaseModel
 import httpx
+import json
 
 
 
 OLLAMA_MODEL = "qwen3.5:4b"
 OLLAMA_URL = "http://localhost:11434"
+
+SYSTEM_PROMPT = """You are a helpful assistant. Be concise and direct.
+
+You have access to agents that can fetch real data when you need it:
+- github_agent: use when the user asks about a specific repository, file, or code on GitHub
+
+If you can answer from your own knowledge, do so. Only call an agent when you actually need live data you don't have.
+
+When you need to call an agent, respond with JSON only, nothing else:
+{"agent": "github_agent", "query": "<what you need from it>"}"""
 
 app = FastAPI()
 
@@ -19,24 +30,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-"""
-{
-"model":"qwen3.5:4b",
-"created_at":"2026-06-27T02:39:52.921719Z",
-"message":{
-    "role":"assistant",
-    "content":"Hello! How can I help you today?"
-},
-"done":true,
-"done_reason":"stop",
-"total_duration":843278833,
-"load_duration":139553041,
-"prompt_eval_count":17,
-"prompt_eval_duration":214781833,
-"eval_count":10,
-"eval_duration":481586749
-}
-"""
 
 class MessageRequest(BaseModel):
     text: str
@@ -75,8 +68,36 @@ async def generate(body: ModelRequest):
     if not body.model or not body.messages:
         raise HTTPException(status_code=400, detail="No payload provided")
     
-    payload = body.model_dump()
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        *[m.model_dump() for m in body.messages],
+    ]
 
+    # blocking call to check if the model wants to route to an agent
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": body.model, "messages": messages, "stream": False},
+        )
+        resp.raise_for_status()
+        content = resp.json()["message"]["content"]
+
+    try:
+        routing = json.loads(content)
+        if "agent" in routing:
+            print(f"[agent call] agent={routing['agent']} query={routing.get('query')}")
+            # agent execution goes here
+            return
+    except (json.JSONDecodeError, KeyError):
+        pass
+
+    # not an agent call — stream normally
+    payload = {
+        "model": body.model,
+        "messages": messages,
+        "stream": True,
+        "think": body.think,
+    }
 
     async def proxy_stream():
         async with httpx.AsyncClient(timeout=120.0) as client:

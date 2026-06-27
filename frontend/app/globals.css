@@ -1,0 +1,13 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body { background: #fff; }
+
+/* markdown inside assistant bubbles */
+.md > * + * { margin-top: 0.5em; }
+.md ul, .md ol { padding-left: 1.25em; }
+.md li + li { margin-top: 0.2em; }
+.md code { background: rgba(0,0,0,0.07); border-radius: 3px; padding: 0.1em 0.35em; font-size: 0.88em; font-family: ui-monospace, monospace; }
+.md pre { background: rgba(0,0,0,0.07); border-radius: 6px; padding: 0.75em 1em; overflow-x: auto; }
+.md pre code { background: none; padding: 0; }
+.md strong { font-weight: 600; }
+.md a { color: inherit; text-decoration: underline; }

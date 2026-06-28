@@ -41,7 +41,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "qwen3.5:4b",
+          model: "qwen3.5:9b",
           messages: history.map((m) => ({ role: m.role, content: m.content })),
           stream: true,
           think: false,
@@ -94,17 +94,11 @@ export default function Home() {
     }
   }
 
-  async function getRepoIssues() {
-
+  async function searchRepos() {
     try {
-
-      const res = await fetch(`${GITHUB_URL}/repos/matthew-beep/agents/git/trees/main?recursive=1`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      console.log(await res.json());
-
+      const res = await fetch(`${API_URL}/search?q=local+LLM+agent+tool+use&sort=stars`);
+      const data = await res.json();
+      console.log(data);
     } catch (error) {
       console.error(error);
     }
@@ -112,7 +106,9 @@ export default function Home() {
 
   return (
     <main style={s.main}>
-      <button onClick={getRepoIssues}>get repo issues</button>
+      <button onClick={searchRepos} style={{ ...s.button, margin: "0.75rem 1rem 0" }}>
+        Search repos
+      </button>
       <div style={s.messageList}>
         {messages.map((msg, i) => (
           <div

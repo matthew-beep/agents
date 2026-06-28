@@ -68,6 +68,8 @@ async def generate(body: ModelRequest):
     if not body.model or not body.messages:
         raise HTTPException(status_code=400, detail="No payload provided")
     
+
+    print("message received", body.messages[-1].content)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *[m.model_dump() for m in body.messages],
@@ -87,7 +89,7 @@ async def generate(body: ModelRequest):
         if "agent" in routing:
             print(f"[agent call] agent={routing['agent']} query={routing.get('query')}")
             # agent execution goes here
-            return
+            return 
     except (json.JSONDecodeError, KeyError):
         pass
 

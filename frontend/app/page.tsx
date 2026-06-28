@@ -137,6 +137,7 @@ export default function Home() {
             </div>
           </div>
         ))}
+        {loading && <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>...</div>}
 
         {loading && streamingThink && !streamingContent && (
           <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>

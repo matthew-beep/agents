@@ -1,4 +1,4 @@
-# Agent Chat — Roadmap
+# Project Discovery Agent — Roadmap
 
 ## Current state
 
@@ -45,26 +45,28 @@ Make it easy to add new agents without touching `main.py`.
 
 ---
 
-## Phase 4 — GitHub Trend Watcher (digest mode)
+## Phase 4 — Project-to-repo discovery (digest mode)
 
-The original concept — a scheduled agent that surfaces trending repos.
+User describes a project they're building — agent finds related repos worth studying.
 
-- [ ] `backend/agents/trend_agent.py` — fetches trending repos by topic, summarizes with LLM, writes digest
+- [ ] `backend/agents/discovery_agent.py` — takes a project description, extracts keywords/themes, searches GitHub, ranks and summarizes results
+- [ ] LLM step: extract search terms from the description (languages, patterns, domain keywords)
+- [ ] GitHub search step: run queries against those terms, deduplicate results
+- [ ] LLM step: for each repo, fetch README and summarize why it's relevant to the described project
+- [ ] LLM step: synthesize a short "what to look at and why" across all results
 - [ ] `data/digest.json` output
-- [ ] `run.py` entry point to trigger manually
-- [ ] `data/user_prefs.json` for topic preferences
-- [ ] Cron job or launchd plist for nightly runs
+- [ ] `run.py` entry point — accepts a project description as input
 
-**Milestone:** `python run.py` produces a valid `digest.json`.
+**Milestone:** `python run.py "I'm building a local LLM agent with tool use"` returns a ranked list of relevant repos with explanations.
 
 ---
 
-## Phase 5 — Digest frontend
+## Phase 5 — Discovery frontend
 
-- [ ] `app/digest/page.tsx` — separate route from the chat UI
+- [ ] `app/discover/page.tsx` — text area for project description + submit
 - [ ] `app/api/digest/route.ts` — reads `data/digest.json`
-- [ ] `components/DigestCard.tsx` — repo card (name, stars, summary, link)
-- [ ] `components/SynthesisPanel.tsx` — cross-repo patterns banner
+- [ ] `components/DigestCard.tsx` — repo card (name, stars, relevance summary, link)
+- [ ] `components/SynthesisPanel.tsx` — overall "here's what the landscape looks like" summary
 
 ---
 

@@ -9,7 +9,6 @@ If you can answer from your own knowledge, do so. Only call a tool when you actu
 When reporting tool results, always use the exact data returned — never infer, summarize, or invent file paths or structure. If the tree is truncated, say so."""
 
 
-async def run(model: str, messages: list[dict], think: bool):
+async def run(model: str, messages: list[dict], think: bool) -> tuple[str, list[dict]]:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
-    async for chunk in run_agent("github_agent", model, messages, github.TOOLS, github.TOOL_MAP, think):
-        yield chunk
+    return await run_agent("github_agent", model, messages, github.TOOLS, github.TOOL_MAP, think)

@@ -1,15 +1,15 @@
 # TODO
 
-## Tool call streaming + history (high priority)
+## Live streaming of final response (orchestrator)
 
-Buffer prose in `base.py`, stream typed tool events to the frontend, flush final response live. Gives responsive UX, no duplicated answers, and a foundation for tool history.
+The orchestrator currently buffers the entire final response before yielding it — it collects into `content_buffer` and then does `for line in content_buffer: yield line + "\n"` after the stream closes. This means the user sees nothing until Ollama finishes generating.
 
-**Approach:**
-- `base.py` — buffer content chunks, yield `{"type": "tool_call", "tool": fn_name, "args": fn_args}` and `{"type": "tool_result", "tool": fn_name}` around each tool execution. On final pass (no tool calls), flush buffer live.
-- `orchestrator.py` — own run loop instead of using `base.py`'s `run_agent`, so it can iterate sub-agent stream directly, forward `type` chunks upstream, and collect content into the tool result string.
-- Frontend — `type: tool_call` → add to tool history panel. `type: tool_result` → mark done. No `type` → stream into message bubble.
+**Fix:**
+- Inside the `async for line in resp.aiter_lines()` loop, yield content chunks immediately when there are no tool calls in the current chunk.
+- Problem: we don't know if a tool-call chunk is coming later in the same pass. Ollama sends tool calls as a single chunk, so if content has already been yielded and then a tool-call chunk arrives, the frontend has stale partial content.
+- Solution: emit `{"type": "reset"}` before any `agent_start` event. The frontend discards `streamingContent` on receipt. This lets us stream content live and still handle the tool-call-after-content case cleanly.
 
-**Why:** Model sometimes starts responding mid-tool-loop causing duplicate/partial answers. Tool history lets users audit what the agent actually did.
+**Frontend change needed:** handle `data.type === "reset"` by setting `streamingContent` and `streamingThink` back to `""`.
 
 ---
 
@@ -22,3 +22,13 @@ Add `BINARY_EXTENSIONS` set in `tools/github.py` and skip those paths in `_build
 ## .env + GITHUB_TOKEN
 
 Add `python-dotenv` to `requirements.txt`, load `.env` in `tools/github.py`. Bumps GitHub API rate limit from 10 to 30 req/min — needed for multi-repo research queries.
+
+---
+
+## Done
+
+### Agent activity panel ✓
+- `base.py` — plain `async def run_agent(...)` returning `tuple[str, list[dict]]`. Accumulates `tool_history` across loop iterations.
+- `github_agent.py` — drops the generator, returns `await run_agent(...)` directly.
+- `orchestrator.py` — owns the Ollama loop. Yields `{"type": "agent_start"}` before each sub-agent call, `{"type": "agent_end", "tools": tool_history}` after. Sub-agents are fire-and-collect.
+- Frontend — `AgentActivity[]` state. `agent_start` pushes a running entry; `agent_end` marks it done and attaches tools. Panel shows `GitHub Agent ✓ (2 tools)` with click-to-expand tool list. Trace persists on the message after streaming ends.

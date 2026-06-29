@@ -1,15 +1,37 @@
 # TODO
 
-## Live streaming of final response (orchestrator)
+## Streaming + agent events (high priority)
 
-The orchestrator currently buffers the entire final response before yielding it — it collects into `content_buffer` and then does `for line in content_buffer: yield line + "\n"` after the stream closes. This means the user sees nothing until Ollama finishes generating.
+Three things to fix, in order:
 
-**Fix:**
-- Inside the `async for line in resp.aiter_lines()` loop, yield content chunks immediately when there are no tool calls in the current chunk.
-- Problem: we don't know if a tool-call chunk is coming later in the same pass. Ollama sends tool calls as a single chunk, so if content has already been yielded and then a tool-call chunk arrives, the frontend has stale partial content.
-- Solution: emit `{"type": "reset"}` before any `agent_start` event. The frontend discards `streamingContent` on receipt. This lets us stream content live and still handle the tool-call-after-content case cleanly.
+### 1. Fix burst streaming (orchestrator.py)
+Remove `content_buffer`. Yield content chunks live inside the `async for` loop while the stream is open. If tool_calls appear after content has already been yielded, emit `{"type": "reset"}` so the frontend discards the partial content.
 
-**Frontend change needed:** handle `data.type === "reset"` by setting `streamingContent` and `streamingThink` back to `""`.
+### 2. Clean sub-agent boundary (already done)
+Sub-agents are non-streaming reasoning units — they run a tool loop, synthesize a result, and return `(content, tool_history)`. No streaming, no UI assumptions. Keep it this way.
+
+### 3. Minimal orchestration events (UI signals only, already done)
+`agent_start` and `agent_end` are emitted by the orchestrator as UI signals only — they are not part of streaming logic. Frontend renders them as the agent activity panel.
+
+---
+
+## Long-term: streaming multi-agent runtime
+
+The end goal is a system where multiple agents can run concurrently and the user sees their state as it evolves — not just a final answer.
+
+**What this looks like:**
+- Orchestrator fans out to multiple agents in parallel (GitHub agent + search agent + code agent, etc.)
+- Each agent emits a continuous stream of events (`agent_start`, `tool_call`, `tool_result`, `text_delta`)
+- Frontend renders a live timeline of agent activity — ongoing reasoning made visible, not just results
+- Orchestrator becomes a scheduler that routes tools and merges agent streams, not a sequential caller
+
+**Evolution path from current system:**
+1. Fix streaming + agent events (current priority)
+2. Add more sequential agents
+3. Run agents in parallel, merge event streams
+4. Full observable runtime with live agent panels
+
+The decisions made now (streaming orchestrator, event-based frontend, fire-and-collect sub-agents) open the door to this without a rewrite. Don't build it yet — but don't close the door either.
 
 ---
 

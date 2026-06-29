@@ -40,10 +40,7 @@ async def run(model: str, messages: list[dict], think: bool):
 
     while True:
         tool_calls = []
-        content_buffer = []
 
-        # Stream one pass from Ollama. Buffer everything — we don't know yet if this
-        # is a tool-calling pass or the final response.
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream(
                 "POST",
@@ -59,14 +56,14 @@ async def run(model: str, messages: list[dict], think: bool):
 
                     if msg.get("tool_calls"):
                         tool_calls.extend(msg["tool_calls"])
-                        content_buffer.clear()
+                        # Content may have already reached the frontend — tell it to discard.
+                        yield json.dumps({"type": "reset"}) + "\n"
                     else:
-                        content_buffer.append(line)
+                        # Yield live while the stream is open.
+                        yield line + "\n"
 
-        # No tool calls — this is the final response. Stream it live to the frontend.
+        # Content was already streamed live — nothing left to do on the final pass.
         if not tool_calls:
-            for line in content_buffer:
-                yield line + "\n"
             break
 
         # For each agent call: emit start event, run the agent (fire-and-collect),

@@ -10,6 +10,8 @@ async def run_agent(name: str, model: str, messages: list[dict], tools: list, to
     while True:
         tool_calls = []
 
+        content_buffer = []
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream(
                 "POST",
@@ -25,10 +27,13 @@ async def run_agent(name: str, model: str, messages: list[dict], tools: list, to
 
                     if msg.get("tool_calls"):
                         tool_calls.extend(msg["tool_calls"])
+                        content_buffer.clear()
                     else:
-                        yield line + "\n"
+                        content_buffer.append(line)
 
         if not tool_calls:
+            for line in content_buffer:
+                yield line + "\n"
             print(f"[{name}] done")
             break
 

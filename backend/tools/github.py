@@ -1,5 +1,6 @@
 import httpx
 import os
+import base64
 
 GITHUB_URL = "https://api.github.com"
 
@@ -17,6 +18,8 @@ async def search_repos(query: str, sort: str = "stars") -> list:
             params={"q": query, "sort": sort, "per_page": 10},
             headers=_headers(),
         )
+        if resp.status_code == 422:
+            return {"error": f"Invalid search query: {query}. Use simple keywords only, e.g. 'local LLM agent tool use language:python'"}
         resp.raise_for_status()
         items = resp.json().get("items", [])
         return [
@@ -67,10 +70,15 @@ async def get_repo_tree(owner: str, repo: str, branch: str = "main") -> dict:
         }
 
 async def get_file(owner: str, repo: str, path: str) -> str:
-    return ""
-
-async def get_readme(owner: str, repo: str) -> str:
-    return ""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{GITHUB_URL}/repos/{owner}/{repo}/contents/{path}",
+            headers=_headers(),
+        )
+        if resp.status_code == 404:
+            return {"error": f"{path} not found in {owner}/{repo}"}
+        resp.raise_for_status()
+        return base64.b64decode(resp.json()["content"]).decode("utf-8")
 
 
 TOOLS = [
@@ -93,7 +101,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_repos",
-            "description": "Search GitHub for repositories matching a query.",
+            "description": "Search GitHub for repositories. Use simple keywords only, e.g. 'local LLM agent tool use'. Optionally append 'language:python' or 'stars:>100'. Do not use complex syntax.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -124,7 +132,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_file",
-            "description": "Get the raw contents of a file in a GitHub repository.",
+            "description": "Get the raw contents of a file in a GitHub repository. Use path='README.md' to get the README.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -136,21 +144,6 @@ TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_readme",
-            "description": "Get the README of a GitHub repository.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "owner": {"type": "string", "description": "Repository owner"},
-                    "repo": {"type": "string", "description": "Repository name"},
-                },
-                "required": ["owner", "repo"],
-            },
-        },
-    },
 ]
 
 TOOL_MAP = {
@@ -158,5 +151,4 @@ TOOL_MAP = {
     "get_repo": get_repo,
     "get_repo_tree": get_repo_tree,
     "get_file": get_file,
-    "get_readme": get_readme,
 }

@@ -56,6 +56,8 @@ Event = (
 
 
 def emit(event: Event) -> str:
+    if "type" not in event:
+        raise KeyError("Event must have a 'type' field")
     return json.dumps(event) + "\n"
 
 

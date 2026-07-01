@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { ToolCall,  PlanEvent} from "../types";
 
 const API_URL = "http://localhost:8000";
 
-type ToolCall = { tool: string; args: Record<string, unknown> };
+// type ToolCall = { tool: string; args: Record<string, unknown> };
 
 type AgentActivity = {
   agent: string;
@@ -31,7 +32,7 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-
+  const [plan, setPlan] = useState<PlanEvent | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingThink, streamingContent, agentHistory]);
@@ -76,6 +77,7 @@ export default function Home() {
 
       while (true) {
         const { done, value } = await reader.read();
+
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -85,7 +87,7 @@ export default function Home() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const data = JSON.parse(line);
-
+          console.log("data", data);
           if (data.type === "agent_start") {
             // Sub-agent started — add a running entry to the live activity panel.
             const next = [...currentAgentHistory, {
@@ -105,6 +107,9 @@ export default function Home() {
             );
             currentAgentHistory = next;
             setAgentHistory(next);
+          } else if (data.type === "plan") {
+            setPlan(data);
+
           } else {
             // Regular Ollama chunk — extract think/content as before.
             if (data.message?.thinking) {
@@ -114,6 +119,7 @@ export default function Home() {
               finalContent += data.message.content;
               setStreamingContent((prev) => prev + data.message.content);
             }
+            setPlan(null);
           }
         }
       }
@@ -161,6 +167,7 @@ export default function Home() {
 
   return (
     <main style={s.main}>
+
       <div style={s.messageList}>
         {messages.map((msg, i) => (
           <div
@@ -184,6 +191,14 @@ export default function Home() {
             )}
           </div>
         ))}
+
+        {plan && (
+          <div style={{ ...s.row, justifyContent: "flex-start" }}>
+            <div className="md" style={{ ...s.bubble, ...s.assistantBubble }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{plan.content}</ReactMarkdown>
+            </div>
+          </div>
+        )}
 
         {loading && !streamingContent && agentHistory.length === 0 && (
           <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>

@@ -1,8 +1,7 @@
 import httpx
 import json
 
-from agents import github_agent
-
+from agents import github_agent, ollama, events
 OLLAMA_URL = "http://localhost:11434"
 
 SYSTEM_PROMPT = """You are a helpful assistant. Be concise and direct.
@@ -38,10 +37,20 @@ AGENT_MAP = {
 async def run(model: str, messages: list[dict], think: bool):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
 
+    """
+    need to implement our own streaming responses here
+    """
+
+    
     while True:
         tool_calls = []
 
         async with httpx.AsyncClient(timeout=300.0) as client:
+            print("calling initial chat")
+            plan = await ollama.chat(client, model, messages, think=False)
+            print("plan", plan)
+            yield events.emit(events.plan_event("planning..."))
+
             async with client.stream(
                 "POST",
                 f"{OLLAMA_URL}/api/chat",
@@ -60,10 +69,12 @@ async def run(model: str, messages: list[dict], think: bool):
                         yield json.dumps({"type": "reset"}) + "\n"
                     else:
                         # Yield live while the stream is open.
+                        print("yielding line", line)
                         yield line + "\n"
 
         # Content was already streamed live — nothing left to do on the final pass.
         if not tool_calls:
+            print("no tool calls, breaking")
             break
 
         # For each agent call: emit start event, run the agent (fire-and-collect),

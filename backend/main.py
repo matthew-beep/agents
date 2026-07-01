@@ -43,7 +43,7 @@ async def search(q: str, sort: str = "stars"):
 def receive_message(body: MessageRequest) -> MessageResponse:
     return MessageResponse(result=f"{body.text} received")
 
-
+# source .venv/bin/activate
 @app.post("/generate")
 async def generate(body: ModelRequest):
     if not body.model or not body.messages:

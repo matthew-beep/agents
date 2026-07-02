@@ -110,6 +110,12 @@ export default function Home() {
           } else if (data.type === "plan") {
             setPlan(data);
 
+          } else if (data.type === "token") {
+
+            if (data?.content) {
+              finalContent += data?.content;
+              setStreamingContent((prev) => prev + data?.content);
+            }
           } else {
             // Regular Ollama chunk — extract think/content as before.
             if (data.message?.thinking) {

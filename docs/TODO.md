@@ -1,5 +1,29 @@
 # TODO
 
+## Planner-based routing (high priority)
+
+Replace the current streaming-then-reset pattern with a two-step routing approach:
+
+### 1. Add `format` param to `ollama.chat()` (`ollama.py`)
+Pass `"format": "json"` through `_chat_payload` so the planner call gets structured output.
+
+### 2. Rewrite `orchestrator.run()` (`orchestrator.py`)
+
+**Planner call** — non-streaming, JSON mode, new system prompt:
+- Returns `{"mode": "direct"}` or `{"mode": "agentic", "plan": "...", "agents": [{"name": "github_agent", "query": "..."}]}`
+- Use a single `httpx.AsyncClient` for the whole `run()` lifetime
+
+**Direct path** — pipe straight into `ollama.emit_token_stream()`
+
+**Agentic path:**
+1. Emit `plan_event` (with `duration_ms` from planner call)
+2. For each agent in the planner response: emit `agent_start_event`, run `agent.run()`, emit `agent_end_event` with `tool_history`
+3. Append agent results to messages, emit `emit_token_stream()` for synthesis
+
+No `reset` event.
+
+---
+
 ## Streaming + agent events (high priority)
 
 Three things to fix, in order:

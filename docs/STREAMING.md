@@ -11,9 +11,45 @@ Two distinct issues, one fix.
 
 Eliminate `reset` and the conditions that caused it, as hard rules at the serving-call level:
 
-1. Every call that has `tools` attached is non-streaming (`stream: false`). Not an optimization — a correctness rule, because of the Ollama bug above.
-2. Exactly one call per `run()` ever streams: the final synthesis call, made only once `tools` is stripped (`tools: null`) — a call that is structurally incapable of requesting a tool.
+1. Every call that has `tools` attached is non-streaming (`stream: false`). Not an optimization — a correctness rule, because of the Ollama bug above. **This applies at both layers** (see below) — orchestrator routing calls and sub-agent inner loops alike.
+2. Exactly one call per orchestrator `run()` ever streams: the final synthesis call, made only once `tools` is stripped (`tools: null`) — a call that is structurally incapable of requesting a tool.
 3. The tool-gathering phase loops until the model stops requesting tools or `MAX_ROUNDS` is hit. One round is not assumed sufficient — the continuation decision is made by the model itself on each call, not by a separate classifier.
+
+## Two-layer tool model
+
+Routing and execution are separate concerns, and each layer has its own tool loop:
+
+| Layer | Module | Tools | Role |
+|---|---|---|---|
+| **Orchestrator** | `orchestrator.py` | Agents — `github_agent`, future specialists | Decide *which* agent to invoke |
+| **Sub-agent** | `base.py` → e.g. `github_agent.py` | Domain tools — `search_repos`, `get_repo_tree`, `get_file`, … | Execute the agent's multi-step work |
+
+The orchestrator does **not** know about GitHub API tools. It only knows that `github_agent` exists. When the model calls `github_agent(query="…")`, `github_agent.run()` delegates to `run_agent()` with `github.TOOLS` and `github.TOOL_MAP` — a completely separate inner loop.
+
+```
+User query
+    │
+    ▼
+orchestrator.run()
+    │  tools = [github_agent, …]     ← agent-level routing
+    │  stream: false on every round
+    │
+    ├─► agent_start → github_agent
+    │       │
+    │       ▼
+    │   run_agent(name, …, github.TOOLS, github.TOOL_MAP)
+    │       │  stream: false on every round
+    │       │
+    │       ├─► tool_call: get_repo_tree(…)
+    │       ├─► tool_call: get_file(…)
+    │       └─► agent_result: "Here's what I found…"
+    │
+    └─► final synthesis to user
+        tools = null
+        stream: true   ← only call that streams tokens to the frontend
+```
+
+**Key point:** sub-agents still need their tools. The fix is never "remove tools from `base.py`" — it is "keep tools, switch to `stream: false`". Both loops obey the same correctness rule; only the orchestrator's final synthesis call streams to the user.
 
 ## Decisions
 
@@ -50,6 +86,7 @@ async def run(messages):
             break
 
         for call in resp.tool_calls:
+            # `call.name` is an agent (e.g. github_agent), not a domain tool
             yield events.agent_start_event(call.name)
             start = now()
             result_content, tool_history = None, []
@@ -81,17 +118,19 @@ async def run(messages):
 
 ## `base.py` — `run_agent` as a generator
 
+`run_agent()` is the shared inner loop for all sub-agents. Each agent passes its own domain tools — e.g. `github_agent` passes `github.TOOLS` / `github.TOOL_MAP` (`search_repos`, `get_file`, …). The orchestrator never sees these; it only receives the agent's final `agent_result` and the `tool_call` events surfaced live during execution.
+
 Current bug: `run_agent()` calls Ollama with `tools` **and** `stream: True` together — the exact combination banned everywhere else, and the one directly implicated in Ollama's serving-layer reliability issues. It happens to not leak partial content to the frontend today (the function isn't a generator, so nothing is forwarded live), but the underlying reliability risk — buffered or dropped `tool_calls` — is exactly what this doc exists to eliminate, and it doesn't matter whether the *frontend* sees the corruption if the *tool call itself* gets dropped.
 
-Fix: convert `run_agent` into an async generator whose internal tool-calling loop is entirely non-streaming, yielding `tool_call` live as each tool actually fires (not after the whole agent resolves), and a final `agent_result` yield the orchestrator captures (not forwarded to the frontend):
+Fix: convert `run_agent` into an async generator whose internal tool-calling loop is entirely non-streaming **but still passes `tools` on every round**, yielding `tool_call` live as each domain tool actually fires (not after the whole agent resolves), and a final `agent_result` yield the orchestrator captures (not forwarded to the frontend):
 
 ```python
-async def run_agent(call):
-    messages = [agent_system_prompt, {"role": "user", "content": call.args["query"]}]
+async def run_agent(name, model, messages, tools, tool_map, think):
+    # `tools` / `tool_map` are domain-specific — github.TOOLS for github_agent, etc.
     inner_round = 0
 
     while True:
-        resp = await ollama.chat(messages, tools=AGENT_TOOLS, think=False, stream=False)
+        resp = await ollama.chat(messages, tools=tools, think=False, stream=False)
 
         if not resp.tool_calls:
             yield {"type": "agent_result", "content": resp.content}
@@ -106,7 +145,7 @@ async def run_agent(call):
         for tc in resp.tool_calls:
             start = now()
             try:
-                result = await TOOL_MAP[tc.name](**tc.args)
+                result = await tool_map[tc.name](**tc.args)
             except Exception as e:
                 yield {"type": "agent_error", "agent": tc.name, "error": str(e)}
                 result = f"Tool failed: {e}"
@@ -114,7 +153,7 @@ async def run_agent(call):
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(result)})
 ```
 
-Every call inside this loop is non-streaming — no exception. `AGENT_MAX_ROUNDS` can share the outer `MAX_ROUNDS` constant or be its own (smaller) cap; either way, a single agent cannot loop unbounded independent of the orchestrator's own cap.
+Every call inside this loop is non-streaming with `tools` attached — no exception. `AGENT_MAX_ROUNDS` can share the outer `MAX_ROUNDS` constant or be its own (smaller) cap; either way, a single agent cannot loop unbounded independent of the orchestrator's own cap.
 
 ## Error Handling
 
@@ -129,10 +168,10 @@ Tool invocation (`TOOL_MAP[tc.name](**tc.args)`) is wrapped in try/except inside
 | Event | When | Payload |
 |---|---|---|
 | `thinking` | Once, before the first routing call | `{}` |
-| `agent_start` | Agent begins | `{ agent: string }` |
-| `tool_call` | Each tool invocation, live from inside `run_agent` | `{ tool: string, args: object, duration_ms: number }` |
-| `agent_end` | Agent finishes | `{ agent: string, tools: ToolCall[], duration_ms: number }` |
-| `agent_error` | A tool call fails | `{ agent: string, error: string }` |
+| `agent_start` | Orchestrator dispatches a sub-agent | `{ agent: string }` |
+| `tool_call` | Each domain-tool invocation, live from inside `run_agent` (e.g. `get_file`, not `github_agent`) | `{ tool: string, args: object, duration_ms: number }` |
+| `agent_end` | Sub-agent finishes (includes domain `tool_call` history) | `{ agent: string, tools: ToolCall[], duration_ms: number }` |
+| `agent_error` | A domain tool call fails inside a sub-agent | `{ agent: string, error: string }` |
 | `token` | Final synthesis | `{ content: string }` |
 | `done` | Stream complete | `{ tokens: number, tokens_per_sec: number, duration_ms: number, total_ms: number }` |
 
@@ -164,19 +203,25 @@ Ollama returns token counts and durations in the final chunk of each response:
 
 **`orchestrator.py`**
 - Replace the routing call with the `run()` loop above.
-- Every call that includes `tools` is non-streaming.
-- Only the final call, made once `tools: null`, is streaming.
+- `TOOLS` lists **agents** (`github_agent`, …) — not domain tools.
+- Every routing call that includes `tools` is non-streaming.
+- Only the final synthesis call, made once `tools: null`, is streaming.
 - Track `round`, enforce `MAX_ROUNDS`.
 - Delete `PLANNER_SYSTEM_PROMPT` and the JSON-mode `{"mode": ...}` classifier — dead code, superseded by branching on `resp.tool_calls`.
 
 **`base.py`**
 - `run_agent()` becomes an async generator per the section above.
-- Its own tool-calling loop is non-streaming throughout; it has its own round cap.
-- Emits `tool_call` live and a final `agent_result` (captured by the orchestrator, not forwarded).
+- Accepts per-agent `tools` and `tool_map` (e.g. `github.TOOLS` / `github.TOOL_MAP`) — domain tools stay here, not in the orchestrator.
+- Its own tool-calling loop is non-streaming throughout (`tools` attached, `stream: false`); it has its own `AGENT_MAX_ROUNDS` cap.
+- Emits `tool_call` events for domain tools live and a final `agent_result` (captured by the orchestrator, not forwarded).
+
+**`github_agent.py`** (and future agents)
+- Thin wrapper: sets the agent system prompt, then calls `run_agent(name, model, messages, DOMAIN.TOOLS, DOMAIN.TOOL_MAP, think)`.
+- No streaming logic here — all of that lives in `base.py`.
 
 **`ollama.py`**
-- `chat()` — non-streaming, used for every `tools`-attached call.
-- `emit_token_stream()` — streaming, used only for the final synthesis call (`tools=None`).
+- `chat()` — non-streaming, used for every `tools`-attached call at **both** layers.
+- `emit_token_stream()` — streaming, used only for the orchestrator's final synthesis call (`tools=None`).
 
 **`events.py`**
 - Add `thinking_event()` and `agent_error_event()`.

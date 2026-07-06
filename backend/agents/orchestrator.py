@@ -35,7 +35,10 @@ Good order to tackle this in, bottom-up so each piece is independently testable 
 
 1. events.py first. Smallest, no dependencies — add thinking_event() and agent_error_event(), delete PlanEvent/plan_event(). Five minutes, and every other file leans on it.
 
-2. base.py's run_agent() next — this is the active bug, and it's the most isolated thing to fix. It doesn't touch the orchestrator or frontend at all, so you can test it completely standalone: write a throwaway script that calls run_agent() directly with a real GitHub query and just prints whatever it yields. Verify by eye:
+2. base.py's run_agent() next — this is the active bug, and it's the most isolated thing to fix. 
+It doesn't touch the orchestrator or frontend at all, so you can test it completely standalone: write a 
+throwaway script that calls run_agent() directly with a real GitHub query and just prints whatever it yields. 
+Verify by eye:
 - every Ollama call it makes has stream: false whenever tools is attached (no exceptions)
 - tool_call events show up live, one per tool, as they fire — not bunched at the end
 - it terminates via agent_result

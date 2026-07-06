@@ -70,6 +70,25 @@ User describes a project they're building — agent finds related repos worth st
 
 ---
 
+## Future — Project builder mode
+
+A fundamentally different interaction mode. Instead of answering questions, the AI collaborates with the user over a conversation to produce a full development plan, then executes it.
+
+**Shape of the idea:**
+- User describes what they want to build in natural language over multiple turns
+- AI asks clarifying questions, refines scope, surfaces tradeoffs
+- Once the user is satisfied, AI generates a structured development plan (phases, tasks, milestones)
+- Plan becomes executable — agents can scaffold files, create repos, set up CI, open tickets, etc.
+
+**Key difference from current mode:** current mode is stateless Q&A. This mode is stateful — the conversation *is* the planning artifact, and the output is a project, not an answer.
+
+**Open questions:**
+- How do you represent the plan state across turns?
+- When does the AI shift from "gathering requirements" to "proposing a plan"?
+- How granular should the execution be — file-level scaffolding or just a roadmap doc?
+
+---
+
 ## Phase 6 — Persistence & scheduling
 
 - [ ] Swap `digest.json` for Postgres

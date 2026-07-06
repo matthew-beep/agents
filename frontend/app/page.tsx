@@ -116,6 +116,8 @@ export default function Home() {
               finalContent += data?.content;
               setStreamingContent((prev) => prev + data?.content);
             }
+          } else if (data.type === "tool_call") {
+            console.log("tool call", data);
           } else {
             // Regular Ollama chunk — extract think/content as before.
             if (data.message?.thinking) {

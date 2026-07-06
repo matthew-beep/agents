@@ -53,7 +53,7 @@ AGENT_MAP = {
 
 
 async def run(model: str, messages: list[dict], think: bool):
-    planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, *messages]
+    #planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, *messages]
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
 
     """
@@ -65,22 +65,9 @@ async def run(model: str, messages: list[dict], think: bool):
     tool_calls = []
 
     async with httpx.AsyncClient(timeout=300.0) as client:
-        yield events.emit(events.plan_event("planning..."))
-        plan = await ollama.chat(client, model, planner_messages, think=False)
+        yield events.emit(events.plan_event("Thinking..."))
+        plan = await ollama.chat(client, model, messages, think=False, tools=TOOLS)
         print("plan", plan)
-        content = plan["message"]["content"]
-        print("content", content)
-        decision = json.loads(content)
-
-        if decision["mode"] == "direct":
-            # yield "direct mode" + "\n"
-            print("direct mode")
-
-        if decision["mode"] == "agentic":
-            # yield "calling agent..." + "\n"
-            print("calling agent...")
-
-
         async for line in ollama.emit_token_stream(client, model, messages, think=False):
             yield line
         
@@ -137,4 +124,8 @@ async def run(model: str, messages: list[dict], think: bool):
         yield json.dumps({"type": "agent_end", "agent": fn_name, "tools": tool_history}) + "\n"
 
         messages.append({"role": "tool", "content": content})
+
+
+
+        
         """

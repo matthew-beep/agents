@@ -29,6 +29,30 @@ Return nothing except the JSON object.
 
 """
 
+
+"""
+Good order to tackle this in, bottom-up so each piece is independently testable before you wire it to the next:
+
+1. events.py first. Smallest, no dependencies — add thinking_event() and agent_error_event(), delete PlanEvent/plan_event(). Five minutes, and every other file leans on it.
+
+2. base.py's run_agent() next — this is the active bug, and it's the most isolated thing to fix. It doesn't touch the orchestrator or frontend at all, so you can test it completely standalone: write a throwaway script that calls run_agent() directly with a real GitHub query and just prints whatever it yields. Verify by eye:
+- every Ollama call it makes has stream: false whenever tools is attached (no exceptions)
+- tool_call events show up live, one per tool, as they fire — not bunched at the end
+- it terminates via agent_result
+- force a bad query (nonexistent repo) and confirm agent_error fires and it doesn't crash
+- temporarily set AGENT_MAX_ROUNDS = 1 and confirm it actually cuts off a multi-tool query
+
+Don't move on until this works in isolation — it's the piece most likely to have subtle bugs (the inner loop, the round cap, the error path), and it's much easier to debug with print() on a script than through a live stream.
+
+3. orchestrator.py's run() loop. Delete the dead docstring block and PLANNER_SYSTEM_PROMPT, write the real loop calling the now-working run_agent(). Test with curl straight against /generate (like we did earlier in this session) and read the raw NDJSON — you want to see, in order: thinking once, then agent_start/tool_call/agent_end for round 1, tool results appended, round 2 firing correctly for a query that needs two lookups, then token/done. This is still backend-only — no frontend needed to verify it.
+
+4. Frontend last. Once you can see the correct event sequence over curl, page.tsx becomes mechanical: add the phase state machine, handle agent_error, delete plan state and the PlanEvent type. You're just rendering an event stream you've already proven correct.
+
+Want to start on #2 now, or #1 to get it out of the way first? I can review as you go rather than write it — happy to look at diffs, run your curl tests, or poke at edge cases you might've missed.
+
+
+"""
+
 TOOLS = [
     {
         "type": "function",
@@ -59,8 +83,26 @@ async def run(model: str, messages: list[dict], think: bool):
     """
     need to implement our own streaming responses here
     """
-
     
+    call_rounds = 0
+    MAX_ROUNDS = 5
+
+
+    """
+    while true:
+
+        resp = await ollama.chat(client, model, messages, think=False, tools=TOOLS)
+
+        if resp.get("tool_calls"):
+
+            # execute agent loop
+    
+        call_rounds += 1
+
+        if call_rounds < MAX_ROUNDS:
+
+
+    """
     # while True:
     tool_calls = []
 

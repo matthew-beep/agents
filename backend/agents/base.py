@@ -3,6 +3,10 @@ import json
 from agents import ollama, events
 from collections.abc import AsyncIterator
 
+
+
+AGENT_MAX_ROUNDS = 5
+
 # Plain async function — not a generator. Sub-agents don't need to stream to the
 # orchestrator; they just need to return their final content and what tools they called.
 async def run_agent(
@@ -15,22 +19,29 @@ async def run_agent(
 ) -> AsyncIterator[dict]:
 
     print(f"[{name}] starting")
+    rounds = 0
     tool_history = []
     async with httpx.AsyncClient(timeout=300.0) as client:
         while True:
-            tool_calls = []
 
-
+            # get response from agent
             resp = await ollama.chat(client, model, messages, think=think, tools=tools)
             msg = resp.get("message", {})
+
+            tool_calls = msg.get("tool_calls", [])
+
             # No tool calls means this is the final response — collect and return.
-            if not msg.get("tool_calls"):
-                content = "".join(
-                    json.loads(line).get("message", {}).get("content", "")
-                    for line in content_buffer
-                )
+            if not tool_calls:
                 print(f"[{name}] done")
-                return content, tool_history
+                yield events.agent_result_event(msg.get("content", ""))
+                return
+
+            rounds += 1
+            if rounds > AGENT_MAX_ROUNDS:
+                print(f"[{name}] max rounds reached")
+                yield events.agent_result_event("max rounds reached")
+                return
+
 
             print(f"[{name}] tool calls: {[tc['function']['name'] for tc in tool_calls]}")
 
@@ -38,13 +49,20 @@ async def run_agent(
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
                 fn_args = tc["function"]["arguments"]
+                if isinstance(fn_args, str):
+                    fn_args = json.loads(fn_args)
                 # Record before executing so the orchestrator can surface this to the frontend.
-                tool_history.append({"tool": fn_name, "args": fn_args})
                 print(f"[{name}] calling {fn_name} with {fn_args}")
                 fn = tool_map.get(fn_name)
 
-                yield events.emit(events.tool_call_event(fn_name, fn_args))
+                try:
+                    yield events.tool_call_event(fn_name, fn_args)
+                    result = await fn(**fn_args) if fn else f"unknown tool: {fn_name}"
+                    print(f"[{name}] {fn_name} result: {str(result)[:120]}")
+                except Exception as e:
+                    print(f"[{name}] error calling {fn_name}: {e}")
+                    yield events.agent_error_event(name, str(e), tool=fn_name)
+                    result = f"Tool failed: {e}"
 
-                result = await fn(**fn_args) if fn else f"unknown tool: {fn_name}"
-                print(f"[{name}] {fn_name} result: {str(result)[:120]}")
+
                 messages.append({"role": "tool", "content": str(result)})

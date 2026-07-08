@@ -1,6 +1,6 @@
 import json
 import pytest
-from agents.events import emit, plan_event, agent_start_event, tool_call_event, agent_end_event, token_event, done_event
+from agents.events import emit, plan_event, agent_start_event, tool_call_event, agent_end_event, token_event, done_event, agent_error_event
 
 
 # test that emit rejects missing type key
@@ -71,3 +71,18 @@ def test_done_event():
     event_with_tokens = done_event(tokens=100)
 
     assert event_with_tokens == {"type" : "done", "tokens" : 100}
+
+def test_agent_error_event():
+    event_with_tool = agent_error_event("github_agent", "path not found", tool="get_file")
+    event_without_tool = agent_error_event("orchestrator", "connection refused")
+    assert event_with_tool == {
+        "type": "agent_error",
+        "agent": "github_agent",
+        "error": "path not found",
+        "tool": "get_file",
+    }
+    assert event_without_tool == {
+        "type": "agent_error",
+        "agent": "orchestrator",
+        "error": "connection refused",
+    }

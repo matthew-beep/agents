@@ -52,9 +52,12 @@ def _build_tree(paths: list[str]) -> dict:
         node[parts[-1]] = None
     return tree
 
-async def get_repo_tree(owner: str, repo: str, branch: str = "main") -> dict:
-    repo_data = await get_repo(owner, repo)
-    branch = repo_data.get("default_branch", "main")
+async def get_repo_tree(owner: str, repo: str, branch: str | None = None) -> dict:
+    if branch is None:
+        repo_data = await get_repo(owner, repo)
+        if "error" in repo_data:
+            return repo_data
+        branch = repo_data.get("default_branch", "main")
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.get(f"{GITHUB_URL}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1", headers=_headers())
         if resp.status_code == 404:
@@ -79,6 +82,13 @@ async def get_file(owner: str, repo: str, path: str) -> str:
             return {"error": f"{path} not found in {owner}/{repo}"}
         resp.raise_for_status()
         return base64.b64decode(resp.json()["content"]).decode("utf-8")
+
+SYSTEM_PROMPT = """You are a GitHub assistant. Be concise and direct.
+
+You have access to tools that can fetch real data from GitHub.
+If you can answer from your own knowledge, do so. Only call a tool when you actually need live data.
+
+When reporting tool results, always use the exact data returned — never infer, summarize, or invent file paths or structure. If the tree is truncated, say so."""
 
 
 TOOLS = [
@@ -122,7 +132,7 @@ TOOLS = [
                 "properties": {
                     "owner": {"type": "string", "description": "Repository owner"},
                     "repo": {"type": "string", "description": "Repository name"},
-                    "branch": {"type": "string", "description": "Branch name (default: main)"},
+                    "branch": {"type": "string", "description": "Branch name (defaults to the repo's default branch)"},
                 },
                 "required": ["owner", "repo"],
             },

@@ -1,7 +1,8 @@
 import httpx
 import json
-
-from agents import github_agent, ollama, events
+import time
+from agents import ollama, events, registry
+from agents.base import run_agent
 OLLAMA_URL = "http://localhost:11434"
 
 SYSTEM_PROMPT = """You are a helpful assistant. Be concise and direct.
@@ -73,12 +74,6 @@ TOOLS = [
     }
 ]
 
-# Maps agent tool names to their run functions.
-AGENT_MAP = {
-    "github_agent": github_agent.run,
-}
-
-
 async def run(model: str, messages: list[dict], think: bool):
     #planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, *messages]
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
@@ -86,91 +81,90 @@ async def run(model: str, messages: list[dict], think: bool):
     """
     need to implement our own streaming responses here
     """
-    
+
     call_rounds = 0
     MAX_ROUNDS = 5
 
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            yield events.emit(events.plan_event("Thinking..."))
 
-    """
-    while true:
+            while True:
 
-        resp = await ollama.chat(client, model, messages, think=False, tools=TOOLS)
+                print("calling planner")
+                plan = await ollama.chat(client, model, messages, think=False, tools=TOOLS)
+                print("plan", plan)
 
-        if resp.get("tool_calls"):
+                agents = plan["message"].get("tool_calls", [])
 
-            # execute agent loop
-    
-        call_rounds += 1
+                if not agents:
+                    print("no agents found, breaking")
+                    break
 
-        if call_rounds < MAX_ROUNDS:
+                print("plan found", agents)
 
+                call_rounds += 1
+                if call_rounds > MAX_ROUNDS:
+                    break
 
-    """
-    # while True:
-    tool_calls = []
+                for agent in agents:
+                    agent_name = agent["function"]["name"]
+                    agent_args = agent["function"]["arguments"]
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        yield events.emit(events.plan_event("Thinking..."))
-        plan = await ollama.chat(client, model, messages, think=False, tools=TOOLS)
-        print("plan", plan)
-        async for line in ollama.emit_token_stream(client, model, messages, think=False):
-            yield line
-        
-"""
-        if plan["mode"] == "agentic":
-            async for token in ollama.emit_token_stream(client, model, messages, think=False):
-                yield events.emit(token)
-                print("token", token)
+                    if isinstance(agent_args, str):
+                        agent_args = json.loads(agent_args)
 
-        
-        async with client.stream(
-            "POST",
-            f"{OLLAMA_URL}/api/chat",
-            json={"model": model, "messages": messages, "tools": TOOLS, "stream": True, "think": think},
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                chunk = json.loads(line)
-                msg = chunk.get("message", {})
+                    agent_config = registry.AGENTS.get(agent_name, None)
 
-                if msg.get("tool_calls"):
-                    tool_calls.extend(msg["tool_calls"])
-                    # Content may have already reached the frontend — tell it to discard.
-                    yield json.dumps({"type": "reset"}) + "\n"
-                else:
-                    # Yield live while the stream is open.
-                    print("yielding line", line)
-                    yield line + "\n"
+                    if not agent_config:
+                        messages.append({"role": "assistant", "tool_calls": [agent]})
+                        messages.append({"role": "tool", "content": f"Unknown agent: {agent_name}"})
+                        yield events.emit(events.agent_error_event(agent_name, f"Unknown agent: {agent_name}"))
+                        continue
 
-    # Content was already streamed live — nothing left to do on the final pass.
-    if not tool_calls:
-        print("no tool calls, breaking")
-        break
+                    query = agent_args.get("query")
+                    if not query:
+                        messages.append({"role": "assistant", "tool_calls": [agent]})
+                        messages.append({"role": "tool", "content": "Missing required argument: query"})
+                        yield events.emit(events.agent_error_event(agent_name, "Missing required argument: query"))
+                        continue
 
-    # For each agent call: emit start event, run the agent (fire-and-collect),
-    # emit end event with its tool history, then feed its response back to Ollama.
-    messages.append({"role": "assistant", "tool_calls": tool_calls})
-    for tc in tool_calls:
-        fn_name = tc["function"]["name"]
-        fn_args = tc["function"]["arguments"]
+                    yield events.emit(events.agent_start_event(agent_config.name))
+                    start = time.perf_counter()
 
-        yield json.dumps({"type": "agent_start", "agent": fn_name}) + "\n"
+                    tool_history = []
+                    result_content = None
 
-        agent_fn = AGENT_MAP.get(fn_name)
-        if agent_fn:
-            content, tool_history = await agent_fn(
-                model, [{"role": "user", "content": fn_args["query"]}], think
-            )
-        else:
-            content, tool_history = f"unknown agent: {fn_name}", []
+                    agent_messages = [
+                        {"role": "system", "content": agent_config.system_prompt},
+                        {"role": "user", "content": query},
+                    ]
 
-        yield json.dumps({"type": "agent_end", "agent": fn_name, "tools": tool_history}) + "\n"
+                    try:
+                        async for ev in run_agent(
+                            agent_config.name, model, agent_messages,
+                            agent_config.tools, agent_config.tool_map, think
+                        ):
+                            if ev["type"] == "tool_call":
+                                yield events.emit(ev)
+                                tool_history.append({"tool": ev["tool"], "args": ev["args"]})
+                            elif ev["type"] == "agent_result":
+                                result_content = ev["content"]
+                            elif ev["type"] == "agent_error":
+                                yield events.emit(ev)
+                    except Exception as e:
+                        yield events.emit(events.agent_error_event(agent_config.name, str(e)))
+                        result_content = f"Agent failed: {e}"
 
-        messages.append({"role": "tool", "content": content})
+                    yield events.emit(events.agent_end_event(
+                        agent_config.name, tool_history, duration_ms=int((time.perf_counter() - start) * 1000),
+                    ))
 
-
-
-        
-        """
+                    messages.append({"role": "assistant", "tool_calls": [agent]})
+                    messages.append({"role": "tool", "content": result_content or ""})
+            print("starting stream to front end")
+            async for line in ollama.emit_token_stream(client, model, messages, think=think, tools=None):
+                yield line
+    except Exception as e:
+        yield events.emit(events.agent_error_event("orchestrator", str(e)))
+        yield events.emit(events.done_event())

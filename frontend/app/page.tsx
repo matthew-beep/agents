@@ -3,39 +3,64 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ToolCall,  PlanEvent} from "../types";
+import type { DoneEvent, PlanEvent, ToolCall } from "../types";
 
 const API_URL = "http://localhost:8000";
 
-// type ToolCall = { tool: string; args: Record<string, unknown> };
-
 type AgentActivity = {
   agent: string;
-  status: "running" | "done";
+  status: "running" | "done" | "error";
   tools: ToolCall[];
   expanded: boolean;
+  error?: string;
+  duration_ms?: number;
 };
+
+type StreamStats = Pick<DoneEvent, "tokens" | "tokens_per_sec" | "duration_ms">;
 
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
-  // Attached after the response completes so the trace stays visible.
   agentHistory?: AgentActivity[];
+  stats?: StreamStats;
 };
+
+function findLastRunningIndex(history: AgentActivity[], agent?: string): number {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].status !== "running") continue;
+    if (agent && history[i].agent !== agent) continue;
+    return i;
+  }
+  return -1;
+}
+
+function formatToolCall(t: ToolCall): string {
+  const argStr = Object.entries(t.args)
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .join(", ");
+  return argStr ? `${t.tool}(${argStr})` : `${t.tool}()`;
+}
+
+function formatStats(stats: StreamStats): string {
+  const parts: string[] = [];
+  if (stats.tokens_per_sec != null) parts.push(`${stats.tokens_per_sec} tok/s`);
+  if (stats.duration_ms != null) parts.push(`${(stats.duration_ms / 1000).toFixed(1)}s`);
+  if (stats.tokens != null) parts.push(`${stats.tokens} tokens`);
+  return parts.join(" · ");
+}
 
 export default function Home() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Live agent activity during the current streaming response.
   const [agentHistory, setAgentHistory] = useState<AgentActivity[]>([]);
-  const [streamingThink, setStreamingThink] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [plan, setPlan] = useState<PlanEvent | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingThink, streamingContent, agentHistory]);
+  }, [messages, streamingContent, agentHistory]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -46,13 +71,13 @@ export default function Home() {
     setMessages(history);
     setInput("");
     setLoading(true);
-    setStreamingThink("");
     setStreamingContent("");
     setAgentHistory([]);
 
     // Local variable so we always read the latest value when attaching to the message,
     // avoiding stale closure issues with React state.
     let currentAgentHistory: AgentActivity[] = [];
+    let streamStats: StreamStats | undefined;
 
     try {
       const res = await fetch(`${API_URL}/generate`, {
@@ -87,9 +112,9 @@ export default function Home() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const data = JSON.parse(line);
-          console.log("data", data);
+
           if (data.type === "agent_start") {
-            // Sub-agent started — add a running entry to the live activity panel.
+            setPlan(null);
             const next = [...currentAgentHistory, {
               agent: data.agent,
               status: "running" as const,
@@ -98,36 +123,80 @@ export default function Home() {
             }];
             currentAgentHistory = next;
             setAgentHistory(next);
+          } else if (data.type === "tool_call") {
+            const idx = findLastRunningIndex(currentAgentHistory);
+            if (idx >= 0) {
+              const next = [...currentAgentHistory];
+              next[idx] = {
+                ...next[idx],
+                expanded: true,
+                tools: [
+                  ...next[idx].tools,
+                  {
+                    tool: data.tool,
+                    args: data.args ?? {},
+                    duration_ms: data.duration_ms,
+                  },
+                ],
+              };
+              currentAgentHistory = next;
+              setAgentHistory(next);
+            }
+          } else if (data.type === "agent_error") {
+            const idx = findLastRunningIndex(currentAgentHistory, data.agent);
+            if (idx >= 0) {
+              const next = [...currentAgentHistory];
+              const entry = next[idx];
+              next[idx] = {
+                ...entry,
+                error: data.error,
+                tools: data.tool
+                  ? [...entry.tools, { tool: data.tool, args: {}, error: data.error }]
+                  : entry.tools,
+              };
+              currentAgentHistory = next;
+              setAgentHistory(next);
+            } else {
+              const next = [...currentAgentHistory, {
+                agent: data.agent,
+                status: "error" as const,
+                tools: data.tool
+                  ? [{ tool: data.tool, args: {}, error: data.error }]
+                  : [],
+                expanded: true,
+                error: data.error,
+              }];
+              currentAgentHistory = next;
+              setAgentHistory(next);
+            }
           } else if (data.type === "agent_end") {
-            // Sub-agent finished — mark done and attach its tool history.
-            const next = currentAgentHistory.map((a) =>
-              a.agent === data.agent
-                ? { ...a, status: "done" as const, tools: data.tools }
-                : a
-            );
-            currentAgentHistory = next;
-            setAgentHistory(next);
+            const idx = findLastRunningIndex(currentAgentHistory, data.agent);
+            if (idx >= 0) {
+              const next = [...currentAgentHistory];
+              next[idx] = {
+                ...next[idx],
+                status: next[idx].error ? "error" as const : "done" as const,
+                tools: data.tools ?? next[idx].tools,
+                duration_ms: data.duration_ms,
+              };
+              currentAgentHistory = next;
+              setAgentHistory(next);
+            }
           } else if (data.type === "plan") {
             setPlan(data);
-
           } else if (data.type === "token") {
-
-            if (data?.content) {
-              finalContent += data?.content;
-              setStreamingContent((prev) => prev + data?.content);
-            }
-          } else if (data.type === "tool_call") {
-            console.log("tool call", data);
-          } else {
-            // Regular Ollama chunk — extract think/content as before.
-            if (data.message?.thinking) {
-              setStreamingThink((prev) => prev + data.message.thinking);
-            }
-            if (data.message?.content) {
-              finalContent += data.message.content;
-              setStreamingContent((prev) => prev + data.message.content);
-            }
             setPlan(null);
+            if (data.content) {
+              finalContent += data.content;
+              setStreamingContent((prev) => prev + data.content);
+            }
+          } else if (data.type === "done") {
+            setPlan(null);
+            streamStats = {
+              tokens: data.tokens,
+              tokens_per_sec: data.tokens_per_sec,
+              duration_ms: data.duration_ms,
+            };
           }
         }
       }
@@ -135,7 +204,12 @@ export default function Home() {
       // Attach the captured agent history to the message so the trace persists.
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: finalContent, agentHistory: currentAgentHistory },
+        {
+          role: "assistant",
+          content: finalContent,
+          agentHistory: currentAgentHistory.length > 0 ? currentAgentHistory : undefined,
+          stats: streamStats,
+        },
       ]);
     } catch {
       setMessages((prev) => [
@@ -143,9 +217,7 @@ export default function Home() {
         { role: "assistant", content: "Failed to reach server." },
       ]);
     } finally {
-      setStreamingThink("");
       setStreamingContent("");
-      // Clear live panel — the trace now lives on the message.
       setAgentHistory([]);
       setLoading(false);
     }
@@ -195,6 +267,9 @@ export default function Home() {
                 <div className="md" style={{ ...s.bubble, ...s.assistantBubble }}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                 </div>
+                {msg.stats && (
+                  <div style={s.stats}>{formatStats(msg.stats)}</div>
+                )}
               </div>
             )}
           </div>
@@ -208,15 +283,9 @@ export default function Home() {
           </div>
         )}
 
-        {loading && !streamingContent && agentHistory.length === 0 && (
+        {loading && !streamingContent && agentHistory.length === 0 && !plan && (
           <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>
             ...
-          </div>
-        )}
-
-        {loading && streamingThink && !streamingContent && (
-          <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>
-            {streamingThink}
           </div>
         )}
 
@@ -229,8 +298,10 @@ export default function Home() {
 
         {loading && streamingContent && (
           <div style={{ ...s.row, justifyContent: "flex-start" }}>
-            <div className="md" style={{ ...s.bubble, ...s.assistantBubble }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+            <div style={s.assistantGroup}>
+              <div className="md" style={{ ...s.bubble, ...s.assistantBubble }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingContent}</ReactMarkdown>
+              </div>
             </div>
           </div>
         )}
@@ -272,25 +343,51 @@ function AgentPanel({
       {history.map((activity, i) => (
         <div key={i} style={s.agentEntry}>
           <div style={s.agentRow}>
-            <span style={{ color: activity.status === "running" ? "#999" : "#2a7a2a" }}>
-              {activity.status === "running" ? "◌" : "✓"}{" "}
+            <span
+              style={{
+                color:
+                  activity.status === "running"
+                    ? "#999"
+                    : activity.status === "error"
+                      ? "#c0392b"
+                      : "#2a7a2a",
+              }}
+            >
+              {activity.status === "running" ? "◌" : activity.status === "error" ? "✗" : "✓"}{" "}
               {formatAgentName(activity.agent)}
-              {activity.status === "done" &&
+              {activity.tools.length > 0 &&
                 ` (${activity.tools.length} tool${activity.tools.length !== 1 ? "s" : ""})`}
+              {activity.status === "done" && activity.duration_ms != null &&
+                ` · ${(activity.duration_ms / 1000).toFixed(1)}s`}
             </span>
-            {activity.status === "done" && activity.tools.length > 0 && (
+            {activity.tools.length > 0 && (
               <button style={s.expandBtn} onClick={() => onToggle(i)}>
                 {activity.expanded ? "▼" : "▶"}
               </button>
             )}
           </div>
+          {activity.error && !activity.expanded && (
+            <div style={s.agentError}>{activity.error}</div>
+          )}
           {activity.expanded && (
             <div style={s.toolList}>
               {activity.tools.map((t, j) => (
-                <div key={j} style={s.toolEntry}>
-                  {t.tool}()
+                <div
+                  key={j}
+                  style={{
+                    ...s.toolEntry,
+                    ...(t.error ? { color: "#c0392b", borderLeftColor: "#e8b4b4" } : {}),
+                  }}
+                >
+                  {formatToolCall(t)}
+                  {t.error && ` — ${t.error}`}
                 </div>
               ))}
+              {activity.error && (
+                <div style={{ ...s.toolEntry, color: "#c0392b", borderLeftColor: "#e8b4b4" }}>
+                  {activity.error}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -413,5 +510,15 @@ const s: Record<string, React.CSSProperties> = {
   toolEntry: {
     paddingLeft: "0.5rem",
     borderLeft: "2px solid #e0e0e0",
+  },
+  agentError: {
+    paddingLeft: "1rem",
+    color: "#c0392b",
+    fontSize: "0.8rem",
+  },
+  stats: {
+    fontSize: "0.75rem",
+    color: "#aaa",
+    paddingLeft: "0.25rem",
   },
 };

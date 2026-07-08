@@ -1,6 +1,8 @@
 export type ToolCall = {
     tool: string
     args: Record<string, unknown>
+    error?: string
+    duration_ms?: number
 }
 
 export type PlanEvent = {
@@ -41,6 +43,18 @@ export type DoneEvent = {
     total_ms?: number
 }
 
+export type AgentErrorEvent = {
+    type: "agent_error"
+    agent: string
+    error: string
+    tool?: string
+}
+
+export type AgentResultEvent = {
+    type: "agent_result"
+    content: string
+}
+
 export type Event =
     | PlanEvent
     | AgentStartEvent
@@ -48,3 +62,5 @@ export type Event =
     | AgentEndEvent
     | TokenEvent
     | DoneEvent
+    | AgentErrorEvent
+    | AgentResultEvent

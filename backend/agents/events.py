@@ -44,6 +44,17 @@ class DoneEvent(TypedDict, total=False):
     duration_ms: int
     total_ms: int
 
+class AgentResultEvent(TypedDict):
+    type: Literal["agent_result"]
+    content: str
+
+class AgentErrorEvent(TypedDict, total=False):
+    type: Literal["agent_error"]
+    agent: str
+    error: str
+    tool: str
+
+
 
 Event = (
     PlanEvent
@@ -52,6 +63,8 @@ Event = (
     | AgentEndEvent
     | TokenEvent
     | DoneEvent
+    | AgentResultEvent
+    | AgentErrorEvent
 )
 
 
@@ -113,4 +126,14 @@ def done_event(
         event["duration_ms"] = duration_ms
     if total_ms is not None:
         event["total_ms"] = total_ms
+    return event
+
+
+def agent_result_event(content: str) -> AgentResultEvent:
+    return {"type": "agent_result", "content": content}
+
+def agent_error_event(agent: str, error: str, *, tool: str | None = None) -> AgentErrorEvent:
+    event: AgentErrorEvent = {"type": "agent_error", "agent": agent, "error": error}
+    if tool is not None:
+        event["tool"] = tool
     return event

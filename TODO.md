@@ -21,17 +21,24 @@ Backend review pass — 2026-07-07. Ordered by priority.
 
 ## Minor / fine to ignore
 
-- [ ] Three layers of `httpx.AsyncClient` per request (orchestrator → `run_agent` →
-      each github tool). Pass the orchestrator's client down to reuse connections.
-- [ ] `base.py:48` drops any assistant `content` emitted alongside tool calls, and
-      tool-result messages omit `tool_name` (used by models to match results to
-      calls when one round has multiple).
-- [ ] `AGENT_MAX_ROUNDS` cutoff feeds the literal string "max rounds reached" into
-      the final answer; use something like "stopped after N rounds; partial results
-      above".
+(nothing currently)
 
 ## Done (from earlier passes)
 
+- [x] **HTTP client threading** — one `httpx.AsyncClient`, created once in
+      `orchestrator.run()`, now threaded down through `run_agent()` (`base.py`) and
+      into every `tools/github.py` function (`search_repos`, `get_repo`,
+      `get_repo_tree`, `get_file`), instead of each layer opening its own. Each
+      GitHub call keeps its original per-call timeout via `client.get(..., timeout=X)`
+      rather than collapsing onto the Ollama layer's 300s default. `main.py`'s
+      standalone `/search` endpoint (outside the orchestrator flow) opens its own
+      short-lived client since it isn't part of that shared request lifecycle.
+- [x] `AGENT_MAX_ROUNDS` cutoff no longer feeds the literal string "max rounds
+      reached" into the final answer — `base.py` now yields "Stopped after N tool
+      rounds without a final answer" plus any partial model content.
+- [x] `base.py` preserves assistant `content` emitted alongside tool_calls instead of
+      dropping it; tool-result messages in both `base.py` and `orchestrator.py` now
+      carry `tool_name` so multi-tool-call rounds can be matched back to their call.
 - [x] **Registry is now the single source of truth for agents** — `registry.py`
       gained `AgentConfig.description`, `orchestrator_tools()`, and
       `agent_directory()`; `orchestrator.py`'s hardcoded `TOOLS` list and

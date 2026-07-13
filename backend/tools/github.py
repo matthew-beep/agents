@@ -11,36 +11,35 @@ def _headers() -> dict:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
-async def search_repos(query: str, sort: str = "stars") -> list:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            f"{GITHUB_URL}/search/repositories",
-            params={"q": query, "sort": sort, "per_page": 10},
-            headers=_headers(),
-        )
-        if resp.status_code == 422:
-            return {"error": f"Invalid search query: {query}. Use simple keywords only, e.g. 'local LLM agent tool use language:python'"}
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return [
-            {
-                "full_name": r["full_name"],
-                "description": r["description"],
-                "stars": r["stargazers_count"],
-                "language": r["language"],
-                "topics": r["topics"],
-                "url": r["html_url"],
-            }
-            for r in items
-        ]
+async def search_repos(client: httpx.AsyncClient, query: str, sort: str = "stars") -> list:
+    resp = await client.get(
+        f"{GITHUB_URL}/search/repositories",
+        params={"q": query, "sort": sort, "per_page": 10},
+        headers=_headers(),
+        timeout=30.0,
+    )
+    if resp.status_code == 422:
+        return {"error": f"Invalid search query: {query}. Use simple keywords only, e.g. 'local LLM agent tool use language:python'"}
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    return [
+        {
+            "full_name": r["full_name"],
+            "description": r["description"],
+            "stars": r["stargazers_count"],
+            "language": r["language"],
+            "topics": r["topics"],
+            "url": r["html_url"],
+        }
+        for r in items
+    ]
 
-async def get_repo(owner: str, repo: str) -> dict:
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.get(f"{GITHUB_URL}/repos/{owner}/{repo}", headers=_headers())
-        if resp.status_code == 404:
-            return {"error": f"Repository {owner}/{repo} not found"}
-        resp.raise_for_status()
-        return resp.json()
+async def get_repo(client: httpx.AsyncClient, owner: str, repo: str) -> dict:
+    resp = await client.get(f"{GITHUB_URL}/repos/{owner}/{repo}", headers=_headers(), timeout=120.0)
+    if resp.status_code == 404:
+        return {"error": f"Repository {owner}/{repo} not found"}
+    resp.raise_for_status()
+    return resp.json()
 
 def _build_tree(paths: list[str]) -> dict:
     tree = {}
@@ -52,36 +51,39 @@ def _build_tree(paths: list[str]) -> dict:
         node[parts[-1]] = None
     return tree
 
-async def get_repo_tree(owner: str, repo: str, branch: str | None = None) -> dict:
+async def get_repo_tree(client: httpx.AsyncClient, owner: str, repo: str, branch: str | None = None) -> dict:
     if branch is None:
-        repo_data = await get_repo(owner, repo)
+        repo_data = await get_repo(client, owner, repo)
         if "error" in repo_data:
             return repo_data
         branch = repo_data.get("default_branch", "main")
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.get(f"{GITHUB_URL}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1", headers=_headers())
-        if resp.status_code == 404:
-            return {"error": f"Branch '{branch}' not found for {owner}/{repo}."}
-        resp.raise_for_status()
-        data = resp.json()
-        paths = [entry["path"] for entry in data.get("tree", []) if entry["type"] == "blob"]
+    resp = await client.get(
+        f"{GITHUB_URL}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1",
+        headers=_headers(),
+        timeout=120.0,
+    )
+    if resp.status_code == 404:
+        return {"error": f"Branch '{branch}' not found for {owner}/{repo}."}
+    resp.raise_for_status()
+    data = resp.json()
+    paths = [entry["path"] for entry in data.get("tree", []) if entry["type"] == "blob"]
 
-        print(f"repo tree: {_build_tree(paths)}")
-        return {
-            "truncated": data.get("truncated", False),
-            "tree": _build_tree(paths),
-        }
+    print(f"repo tree: {_build_tree(paths)}")
+    return {
+        "truncated": data.get("truncated", False),
+        "tree": _build_tree(paths),
+    }
 
-async def get_file(owner: str, repo: str, path: str) -> str:
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            f"{GITHUB_URL}/repos/{owner}/{repo}/contents/{path}",
-            headers=_headers(),
-        )
-        if resp.status_code == 404:
-            return {"error": f"{path} not found in {owner}/{repo}"}
-        resp.raise_for_status()
-        return base64.b64decode(resp.json()["content"]).decode("utf-8")
+async def get_file(client: httpx.AsyncClient, owner: str, repo: str, path: str) -> str:
+    resp = await client.get(
+        f"{GITHUB_URL}/repos/{owner}/{repo}/contents/{path}",
+        headers=_headers(),
+        timeout=30.0,
+    )
+    if resp.status_code == 404:
+        return {"error": f"{path} not found in {owner}/{repo}"}
+    resp.raise_for_status()
+    return base64.b64decode(resp.json()["content"]).decode("utf-8")
 
 SYSTEM_PROMPT = """You are a GitHub assistant. Be concise and direct.
 

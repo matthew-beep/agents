@@ -1,3 +1,4 @@
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -36,7 +37,8 @@ class ModelRequest(BaseModel):
 
 @app.get("/search")
 async def search(q: str, sort: str = "stars"):
-    return await github.search_repos(q, sort)
+    async with httpx.AsyncClient() as client:
+        return await github.search_repos(client, q, sort)
 
 
 @app.post("/message", response_model=MessageResponse)

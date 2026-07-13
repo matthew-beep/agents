@@ -7,8 +7,8 @@ from collections.abc import AsyncIterator
 
 AGENT_MAX_ROUNDS = 5
 
-# Plain async function — not a generator. Sub-agents don't need to stream to the
-# orchestrator; they just need to return their final content and what tools they called.
+# Async generator. Yields `tool_call` events live as domain tools fire, and a final
+# `agent_result` the orchestrator captures — it does not stream to the frontend itself.
 async def run_agent(
     name: str,
     model: str,
@@ -20,7 +20,6 @@ async def run_agent(
 
     print(f"[{name}] starting")
     rounds = 0
-    tool_history = []
     async with httpx.AsyncClient(timeout=300.0) as client:
         while True:
 
@@ -49,13 +48,13 @@ async def run_agent(
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
                 fn_args = tc["function"]["arguments"]
-                if isinstance(fn_args, str):
-                    fn_args = json.loads(fn_args)
-                # Record before executing so the orchestrator can surface this to the frontend.
-                print(f"[{name}] calling {fn_name} with {fn_args}")
                 fn = tool_map.get(fn_name)
 
                 try:
+                    if isinstance(fn_args, str):
+                        fn_args = json.loads(fn_args)
+                    # Record before executing so the orchestrator can surface this to the frontend.
+                    print(f"[{name}] calling {fn_name} with {fn_args}")
                     yield events.tool_call_event(fn_name, fn_args)
                     result = await fn(**fn_args) if fn else f"unknown tool: {fn_name}"
                     print(f"[{name}] {fn_name} result: {str(result)[:120]}")
@@ -65,4 +64,5 @@ async def run_agent(
                     result = f"Tool failed: {e}"
 
 
-                messages.append({"role": "tool", "content": str(result)})
+                content = result if isinstance(result, str) else json.dumps(result)
+                messages.append({"role": "tool", "content": content})

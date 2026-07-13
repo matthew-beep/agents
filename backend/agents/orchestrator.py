@@ -5,10 +5,10 @@ from agents import ollama, events, registry
 from agents.base import run_agent
 OLLAMA_URL = "http://localhost:11434"
 
-SYSTEM_PROMPT = """You are a helpful assistant. Be concise and direct.
+SYSTEM_PROMPT = f"""You are a helpful assistant. Be concise and direct.
 
 You have access to specialized agents that can fetch real data:
-- github_agent: use when the user asks about a GitHub repository, file, or code
+{registry.agent_directory()}
 
 If you can answer from your own knowledge, do so. Only call an agent when you need live data."""
 
@@ -57,22 +57,7 @@ Want to start on #2 now, or #1 to get it out of the way first? I can review as y
 
 """
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "github_agent",
-            "description": "Fetch data from GitHub — repos, file trees, file contents, READMEs.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "What you need from GitHub"}
-                },
-                "required": ["query"],
-            },
-        },
-    }
-]
+TOOLS = registry.orchestrator_tools()
 
 async def run(model: str, messages: list[dict], think: bool):
     #planner_messages = [{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, *messages]
@@ -111,8 +96,14 @@ async def run(model: str, messages: list[dict], think: bool):
                     agent_name = agent["function"]["name"]
                     agent_args = agent["function"]["arguments"]
 
-                    if isinstance(agent_args, str):
-                        agent_args = json.loads(agent_args)
+                    try:
+                        if isinstance(agent_args, str):
+                            agent_args = json.loads(agent_args)
+                    except json.JSONDecodeError as e:
+                        messages.append({"role": "assistant", "tool_calls": [agent]})
+                        messages.append({"role": "tool", "content": f"Malformed arguments: {e}"})
+                        yield events.emit(events.agent_error_event(agent_name, f"Malformed arguments: {e}"))
+                        continue
 
                     agent_config = registry.AGENTS.get(agent_name, None)
 

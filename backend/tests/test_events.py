@@ -1,6 +1,6 @@
 import json
 import pytest
-from agents.events import emit, plan_event, agent_start_event, tool_call_event, agent_end_event, token_event, done_event, agent_error_event
+from agents.events import emit, thinking_event, agent_start_event, tool_call_event, agent_end_event, token_event, done_event, agent_error_event
 
 
 # test that emit rejects missing type key
@@ -14,10 +14,10 @@ def test_emit_serializes_token_event():
 
     assert json.loads(line) == {"type" : "token", "content" : "hi"}
 
-# test that emit serializes plan event
-def test_emit_serializes_plan_event():
-    line = emit({"type" : "plan", "content" : "thinking...", "duration_ms" : 0})
-    assert json.loads(line) == {"type" : "plan", "content" : "thinking...", "duration_ms" : 0}
+# test that emit serializes thinking event
+def test_emit_serializes_thinking_event():
+    line = emit({"type" : "thinking"})
+    assert json.loads(line) == {"type" : "thinking"}
 
 # test that emit serializes agent start event
 def test_emit_serializes_agent_start_event():
@@ -41,10 +41,10 @@ def test_emit_serializes_done_event():
 
 # --- 
 
-# test that plan_event returns the correct event
-def test_plan_event():
-    event = plan_event("planning", duration_ms=100)
-    assert event == {"type" : "plan", "content" : "planning", "duration_ms" : 100}
+# test that thinking_event returns the correct event
+def test_thinking_event():
+    event = thinking_event()
+    assert event == {"type" : "thinking"}
 
 
 # test that agent_start_event returns the correct event

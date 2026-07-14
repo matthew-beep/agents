@@ -5,10 +5,8 @@ export type ToolCall = {
     duration_ms?: number
 }
 
-export type PlanEvent = {
-    type: "plan"
-    content: string
-    duration_ms?: number
+export type ThinkingEvent = {
+    type: "thinking"
 }
 
 export type AgentStartEvent = {
@@ -56,7 +54,7 @@ export type AgentResultEvent = {
 }
 
 export type Event =
-    | PlanEvent
+    | ThinkingEvent
     | AgentStartEvent
     | ToolCallEvent
     | AgentEndEvent

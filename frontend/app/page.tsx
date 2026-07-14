@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { DoneEvent, PlanEvent, ToolCall } from "../types";
+import type { DoneEvent, ToolCall } from "../types";
 
 const API_URL = "http://localhost:8000";
 
@@ -57,7 +57,7 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const [plan, setPlan] = useState<PlanEvent | null>(null);
+  const [thinking, setThinking] = useState(false);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent, agentHistory]);
@@ -73,6 +73,7 @@ export default function Home() {
     setLoading(true);
     setStreamingContent("");
     setAgentHistory([]);
+    setThinking(true);
 
     // Local variable so we always read the latest value when attaching to the message,
     // avoiding stale closure issues with React state.
@@ -114,7 +115,7 @@ export default function Home() {
           const data = JSON.parse(line);
 
           if (data.type === "agent_start") {
-            setPlan(null);
+            setThinking(false);
             const next = [...currentAgentHistory, {
               agent: data.agent,
               status: "running" as const,
@@ -182,16 +183,16 @@ export default function Home() {
               currentAgentHistory = next;
               setAgentHistory(next);
             }
-          } else if (data.type === "plan") {
-            setPlan(data);
+          } else if (data.type === "thinking") {
+            setThinking(true);
           } else if (data.type === "token") {
-            setPlan(null);
+            setThinking(false);
             if (data.content) {
               finalContent += data.content;
               setStreamingContent((prev) => prev + data.content);
             }
           } else if (data.type === "done") {
-            setPlan(null);
+            setThinking(false);
             streamStats = {
               tokens: data.tokens,
               tokens_per_sec: data.tokens_per_sec,
@@ -219,6 +220,7 @@ export default function Home() {
     } finally {
       setStreamingContent("");
       setAgentHistory([]);
+      setThinking(false);
       setLoading(false);
     }
   }
@@ -275,15 +277,7 @@ export default function Home() {
           </div>
         ))}
 
-        {plan && (
-          <div style={{ ...s.row, justifyContent: "flex-start" }}>
-            <div className="md" style={{ ...s.bubble, ...s.assistantBubble }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{plan.content}</ReactMarkdown>
-            </div>
-          </div>
-        )}
-
-        {loading && !streamingContent && agentHistory.length === 0 && !plan && (
+        {loading && thinking && !streamingContent && agentHistory.length === 0 && (
           <div style={{ ...s.row, justifyContent: "flex-start", color: "#999", fontSize: "0.85rem" }}>
             ...
           </div>

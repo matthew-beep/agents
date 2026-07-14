@@ -3,7 +3,6 @@ import json
 import time
 from agents import ollama, events, registry
 from agents.base import run_agent
-OLLAMA_URL = "http://localhost:11434"
 
 SYSTEM_PROMPT = f"""You are a helpful assistant. Be concise and direct.
 
@@ -19,16 +18,12 @@ TOOLS = registry.orchestrator_tools()
 async def run(model: str, messages: list[dict], think: bool):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
 
-    """
-    need to implement our own streaming responses here
-    """
-
     call_rounds = 0
     MAX_ROUNDS = 5
 
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
-            yield events.emit(events.plan_event("Thinking..."))
+            yield events.emit(events.thinking_event())
 
             while True:
 

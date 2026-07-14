@@ -11,13 +11,7 @@ Backend review pass — 2026-07-07. Ordered by priority.
 
 ## Housekeeping
 
-- [ ] **Dead code in `backend/agents/orchestrator.py`**: planning-notes docstring
-      (lines 34-58), `PLANNER_SYSTEM_PROMPT`, commented-out planner line (78), stray
-      `"""need to implement..."""` string inside `run()` (81-83), unused `OLLAMA_URL` (6).
-      Deferred out of the registry-refactor pass — see `docs/REGISTRY.md`.
-- [ ] **Decide on `plan_event` vs `thinking_event`**: original plan called for
-      renaming; if the frontend renders `plan` fine, keep the name and drop the
-      plan item instead.
+(nothing currently)
 
 ## Minor / fine to ignore
 
@@ -25,6 +19,21 @@ Backend review pass — 2026-07-07. Ordered by priority.
 
 ## Done (from earlier passes)
 
+- [x] **`plan_event` renamed to `thinking_event`** — matches `docs/STREAMING.md`'s
+      original design: a content-free `{"type": "thinking"}` signal (no `content`/
+      `duration_ms`), emitted once before the routing call, purely to give the
+      frontend something to render before any other event exists. Backend:
+      `events.py` (`ThinkingEvent`, `thinking_event()`), `orchestrator.py`'s call
+      site, `test_events.py`. Frontend: `types/index.ts` (`ThinkingEvent`),
+      `page.tsx` — the `plan` object state and its markdown bubble are gone,
+      replaced by a `thinking: boolean` that drives the existing "..." loading
+      indicator; set immediately on submit (not just on receipt of the wire event)
+      so the UI has feedback before the first NDJSON line even arrives. README's
+      event table updated to match.
+- [x] **Dead code in `backend/agents/orchestrator.py` removed**: unused `OLLAMA_URL`
+      constant and the stray `"""need to implement our own streaming responses
+      here"""` docstring. (`PLANNER_SYSTEM_PROMPT` and the commented-out planner
+      line were already gone by the time this was picked up.)
 - [x] **HTTP client threading** — one `httpx.AsyncClient`, created once in
       `orchestrator.run()`, now threaded down through `run_agent()` (`base.py`) and
       into every `tools/github.py` function (`search_repos`, `get_repo`,

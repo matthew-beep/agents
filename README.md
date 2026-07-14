@@ -108,7 +108,7 @@ The `/generate` endpoint streams newline-delimited JSON. One event per line:
 
 | Event | When | Payload |
 |---|---|---|
-| `plan` | Once, before the routing call | `{ content: "Thinking..." }` |
+| `thinking` | Once, before the routing call | `{}` |
 | `agent_start` | Orchestrator dispatches a sub-agent | `{ agent }` |
 | `tool_call` | Each domain-tool invocation, live | `{ tool, args, duration_ms }` |
 | `agent_end` | Sub-agent finishes | `{ agent, tools: ToolCall[], duration_ms }` |

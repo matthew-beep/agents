@@ -7,10 +7,8 @@ class ToolCall(TypedDict):
     args: dict[str, Any]
 
 
-class PlanEvent(TypedDict, total=False):
-    type: Literal["plan"]
-    content: str
-    duration_ms: int
+class ThinkingEvent(TypedDict):
+    type: Literal["thinking"]
 
 
 class AgentStartEvent(TypedDict):
@@ -57,7 +55,7 @@ class AgentErrorEvent(TypedDict, total=False):
 
 
 Event = (
-    PlanEvent
+    ThinkingEvent
     | AgentStartEvent
     | ToolCallEvent
     | AgentEndEvent
@@ -74,11 +72,8 @@ def emit(event: Event) -> str:
     return json.dumps(event) + "\n"
 
 
-def plan_event(content: str, *, duration_ms: int | None = None) -> PlanEvent:
-    event: PlanEvent = {"type": "plan", "content": content}
-    if duration_ms is not None:
-        event["duration_ms"] = duration_ms
-    return event
+def thinking_event() -> ThinkingEvent:
+    return {"type": "thinking"}
 
 
 def agent_start_event(agent: str) -> AgentStartEvent:

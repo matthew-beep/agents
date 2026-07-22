@@ -1,6 +1,7 @@
 import httpx
 import os
 import base64
+from tools.api import get_json
 
 GITHUB_URL = "https://api.github.com"
 
@@ -12,16 +13,17 @@ def _headers() -> dict:
     return headers
 
 async def search_repos(client: httpx.AsyncClient, query: str, sort: str = "stars") -> list:
-    resp = await client.get(
+    data = await get_json(
+        client,
         f"{GITHUB_URL}/search/repositories",
         params={"q": query, "sort": sort, "per_page": 10},
         headers=_headers(),
         timeout=30.0,
+        error_map={422: f"Invalid search query: {query}. Use simple keywords only, e.g. 'local LLM agent tool use language:python'"},
     )
-    if resp.status_code == 422:
-        return {"error": f"Invalid search query: {query}. Use simple keywords only, e.g. 'local LLM agent tool use language:python'"}
-    resp.raise_for_status()
-    items = resp.json().get("items", [])
+    if "error" in data:
+        return data
+    items = data.get("items", [])
     return [
         {
             "full_name": r["full_name"],
@@ -35,11 +37,13 @@ async def search_repos(client: httpx.AsyncClient, query: str, sort: str = "stars
     ]
 
 async def get_repo(client: httpx.AsyncClient, owner: str, repo: str) -> dict:
-    resp = await client.get(f"{GITHUB_URL}/repos/{owner}/{repo}", headers=_headers(), timeout=120.0)
-    if resp.status_code == 404:
-        return {"error": f"Repository {owner}/{repo} not found"}
-    resp.raise_for_status()
-    return resp.json()
+    return await get_json(
+        client,
+        f"{GITHUB_URL}/repos/{owner}/{repo}",
+        headers=_headers(),
+        timeout=120.0,
+        error_map={404: f"Repository {owner}/{repo} not found"},
+    )
 
 def _build_tree(paths: list[str]) -> dict:
     tree = {}
@@ -57,15 +61,16 @@ async def get_repo_tree(client: httpx.AsyncClient, owner: str, repo: str, branch
         if "error" in repo_data:
             return repo_data
         branch = repo_data.get("default_branch", "main")
-    resp = await client.get(
-        f"{GITHUB_URL}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1",
+    data = await get_json(
+        client,
+        f"{GITHUB_URL}/repos/{owner}/{repo}/git/trees/{branch}",
+        params={"recursive": 1},
         headers=_headers(),
         timeout=120.0,
+        error_map={404: f"Branch '{branch}' not found for {owner}/{repo}."},
     )
-    if resp.status_code == 404:
-        return {"error": f"Branch '{branch}' not found for {owner}/{repo}."}
-    resp.raise_for_status()
-    data = resp.json()
+    if "error" in data:
+        return data
     paths = [entry["path"] for entry in data.get("tree", []) if entry["type"] == "blob"]
 
     print(f"repo tree: {_build_tree(paths)}")
@@ -75,15 +80,60 @@ async def get_repo_tree(client: httpx.AsyncClient, owner: str, repo: str, branch
     }
 
 async def get_file(client: httpx.AsyncClient, owner: str, repo: str, path: str) -> str:
-    resp = await client.get(
+    data = await get_json(
+        client,
         f"{GITHUB_URL}/repos/{owner}/{repo}/contents/{path}",
         headers=_headers(),
         timeout=30.0,
+        error_map={404: f"{path} not found in {owner}/{repo}"},
     )
-    if resp.status_code == 404:
-        return {"error": f"{path} not found in {owner}/{repo}"}
-    resp.raise_for_status()
-    return base64.b64decode(resp.json()["content"]).decode("utf-8")
+    if "error" in data:
+        return data
+    return base64.b64decode(data["content"]).decode("utf-8")
+
+async def list_issues(client: httpx.AsyncClient, owner: str, repo: str, state: str = "open") -> list:
+    data = await get_json(
+        client,
+        f"{GITHUB_URL}/repos/{owner}/{repo}/issues",
+        params={"state": state, "per_page": 10},
+        headers=_headers(),
+        timeout=30.0,
+        error_map={404: f"Repository {owner}/{repo} not found"},
+    )
+    if isinstance(data, dict) and "error" in data:
+        return data
+    return [
+        {"number": i["number"], "title": i["title"], "state": i["state"],
+         "comments": i["comments"], "labels": [l["name"] for l in i["labels"]]}
+        for i in data if "pull_request" not in i
+    ]
+
+async def search_code(client: httpx.AsyncClient, query: str, owner: str | None = None, repo: str | None = None) -> list:
+    q = query
+    if owner and repo:
+        q = f"{query} repo:{owner}/{repo}"
+    elif owner:
+        q = f"{query} user:{owner}"
+    data = await get_json(
+        client,
+        f"{GITHUB_URL}/search/code",
+        params={"q": q, "per_page": 10},
+        headers=_headers(),
+        timeout=30.0,
+        error_map={
+            401: "GitHub code search requires authentication. Set GITHUB_TOKEN to use this tool.",
+            403: "GitHub code search rate limit exceeded. Try again later or narrow the query.",
+            422: f"Invalid code search query: {q}. Code search needs qualifiers beyond bare keywords — try 'in:file', 'language:', 'path:', or 'extension:', and scope with owner/repo if possible.",
+        },
+    )
+    if isinstance(data, dict) and "error" in data:
+        return data
+    items = data.get("items", [])
+    return [
+        {"path": item["path"], "repo": item["repository"]["full_name"],
+         "url": item["html_url"], "score": item.get("score")}
+        for item in items
+    ]
 
 SYSTEM_PROMPT = """You are a GitHub assistant. Be concise and direct.
 
@@ -156,6 +206,38 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": "Search for code across GitHub. Requires GITHUB_TOKEN to be configured — if this errors, relay the error to the user rather than retrying. Needs more specific queries than search_repos: combine keywords with qualifiers, e.g. 'in:file', 'language:python', 'path:src/', or 'extension:py' — bare keyword-only queries are often rejected. Pass owner (and optionally repo) to scope the search instead of searching all of GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Code search query, e.g. 'def parse_args in:file language:python'"},
+                    "owner": {"type": "string", "description": "Optional: scope search to this user or organization"},
+                    "repo": {"type": "string", "description": "Optional: scope search to this repository (requires owner)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_issues",
+            "description": "List open or closed issues in a GitHub repository. Pull requests are excluded from results.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string", "description": "Repository owner"},
+                    "repo": {"type": "string", "description": "Repository name"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "description": "Issue state filter"},
+                },
+                "required": ["owner", "repo"],
+            },
+        },
+    },
 ]
 
 TOOL_MAP = {
@@ -163,4 +245,6 @@ TOOL_MAP = {
     "get_repo": get_repo,
     "get_repo_tree": get_repo_tree,
     "get_file": get_file,
+    "search_code": search_code,
+    "list_issues": list_issues,
 }

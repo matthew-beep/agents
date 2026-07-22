@@ -59,6 +59,23 @@ The decisions made now (streaming orchestrator, event-based frontend, fire-and-c
 
 ---
 
+## Agents-listing endpoint
+
+Add a `GET /agents` (or similar) endpoint in `main.py` that exposes `registry.AGENTS`
+metadata (name, description, tool count) to the frontend — currently nothing surfaces
+this outside the backend; the frontend only ever learns an agent exists when it
+happens to fire during a chat run.
+
+Needed for any "see the existing agents" screen — the Agent Roster concept from the
+`Wireframes`/`Wireframes v2` designs surveyed in `docs/USER_FLOW.md`, and relevant to
+either candidate philosophy there (guided-workflow or fleet-monitoring): both need
+some way to list what agents exist independent of a specific chat run. Low-effort
+since `registry.py` already derives `orchestrator_tools()`/`agent_directory()` from
+`AGENTS` — this is the same derivation, exposed as an HTTP response instead of prompt
+text.
+
+---
+
 ## Filter binary files from get_repo_tree
 
 Add `BINARY_EXTENSIONS` set in `tools/github.py` and skip those paths in `_build_tree`. Repos with large example image folders (e.g. `example/courthouse/000000.png x286`) bloat the tree and slow down Ollama's context processing.
@@ -72,6 +89,20 @@ Add `python-dotenv` to `requirements.txt`, load `.env` in `tools/github.py`. Bum
 ---
 
 ## Done
+
+### GitHub agent: search_code, list_issues, shared request helper ✓
+- `tools/api.py` — new `get_json()`: generic GET → status-check → `raise_for_status()`
+  → `.json()` helper, GitHub-agnostic (no base URL/auth), reusable by future agents.
+- `tools/github.py` — existing 4 tools refactored to use it (behavior-identical); added
+  `search_code` (requires `GITHUB_TOKEN`, no anonymous fallback) and `list_issues`.
+- `tests/test_api.py` — dependency-free unit tests for `get_json` (no mocking lib
+  needed). No unit tests for the GitHub-specific tools themselves — matches this
+  project's live-verification convention (see `docs/WEB_AGENT.md`).
+- Found via live testing: `facebook/react` has been renamed at the org level (now
+  canonically `react/react`), so GitHub 301-redirects requests to the old owner/repo
+  path. `httpx.AsyncClient` doesn't follow redirects by default, so every GitHub tool
+  was silently failing on any renamed repo — `get_json` now passes
+  `follow_redirects=True`, fixing it for all 6 tools at once.
 
 ### Agent activity panel ✓
 - `base.py` — plain `async def run_agent(...)` returning `tuple[str, list[dict]]`. Accumulates `tool_history` across loop iterations.

@@ -27,15 +27,9 @@ The streaming architecture (see STREAMING.md) is the foundation. Agents plug int
 ## Agent Registry
 
 ### 1. GitHub Agent
-**Status:** Built
-
-**Purpose:** Fetch live data from GitHub — repos, file trees, file contents, READMEs.
-
-**Tools:**
-- `search_repos(query, sort)` — GitHub search API
-- `get_repo_tree(owner, repo)` — full file path list
-- `get_file(owner, repo, path)` — raw file content
-- `get_readme(owner, repo)` — README text
+**Status:** Built — `search_repos`, `get_repo`, `get_repo_tree`, `get_file`.
+Full current tool list, conventions, and the planned next tools (code search, issues,
+PRs, commits, releases) are in `docs/GITHUB_AGENT.md`.
 
 **Example triggers:**
 - "What files are in owner/repo?"
@@ -45,14 +39,13 @@ The streaming architecture (see STREAMING.md) is the foundation. Agents plug int
 ---
 
 ### 2. Web Search Agent
-**Status:** Planned — next to build
+**Status:** Planned — next to build. Full plan (tools, backend choice, "clicking"
+links via `fetch_page`, dev-vs-server search backend tradeoff) is in
+`docs/WEB_AGENT.md`.
 
-**Purpose:** Search the web and return synthesized results. Feeds into other agents (frontend agent uses it for research, discovery agent uses it for trend monitoring).
-
-**Tools:**
-- `search(query)` — SearXNG (self-hosted)
-- `fetch_page(url)` — Crawl4AI for clean text extraction
-- `summarize(content)` — internal LLM step
+**Purpose:** Search the web and read real page content — not just snippets. Feeds
+into other agents (frontend agent uses it for research, discovery agent uses it for
+trend monitoring).
 
 **Example triggers:**
 - "What's the latest on X?"
